@@ -23,7 +23,7 @@ app.use((req, res, next) => {
     next();
 });
 
-app.post('/api/update-sat', async (req, res) => {
+app.get('/api/update-sat', async (req, res) => {
     const save = await updateSatellitesFromAPI();
 
     if (!save) {
