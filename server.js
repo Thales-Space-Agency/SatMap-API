@@ -1,7 +1,7 @@
-import express from 'express';
-import fs from 'fs';
-import satellite from 'satellite.js';
-import winston from 'winston';
+const express = require('express');
+const fs = require('fs');
+const satellite = require('satellite.js');
+const winston = require('winston');
 
 const app = express();
 const port = 4000;
@@ -12,9 +12,9 @@ const logger = winston.createLogger({
     level: 'error',
     format: winston.format.json(),
     transports: [
-      new winston.transports.File({ filename: 'error.log', level: 'error' })
+        new winston.transports.File({ filename: 'error.log', level: 'error' })
     ]
-  });
+});
 
 app.use(express.json());
 
@@ -51,49 +51,52 @@ app.listen(port, () => {
 
 let satellites = [];
 
-async function updateSatellitesFromAPI() {
+function updateSatellitesFromAPI() {
     const satellitesPerPage = 100;
     const maxConcurrentRequests = 10;
     let page = getLastPage() + 1;
     let totalSatellites = 0;
 
-    async function fetchPage(page) {
-        const response = await fetch(`https://tle.ivanstanojevic.me/api/tle?page=${page}&page-size=${satellitesPerPage}`);
-        if (!response.ok) {
-            throw new Error(`Erreur HTTP ! statut: ${response.status}`);
-        }
-        return response.json();
+    function fetchPage(page) {
+        return fetch(`https://tle.ivanstanojevic.me/api/tle?page=${page}&page-size=${satellitesPerPage}`)
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error(`Erreur HTTP ! statut: ${response.status}`);
+                }
+                return response.json();
+            });
     }
 
-    async function processBatch(batch, currentPage) {
+    function processBatch(batch, currentPage) {
         console.log(`Récupération des TLE de la page ${page} à la page ${page + maxConcurrentRequests - 1}...`);
-    
+
         const promises = batch.map(page => fetchPageWithTimeout(page, 40000)); // 10000 ms = 10 secondes de timeout
-    
-        const results = await Promise.allSettled(promises);
-    
-        results.forEach((result, index) => {
-            if (result.status === 'fulfilled') {
-                totalSatellites = result.value.totalItems;
-                result.value.member.forEach(async member => {
 
-                    // Convertir les données TLE en coordonnées 3D
-                    const coords = await tleTo3dCoordinates(member.line1, member.line2);
+        return Promise.allSettled(promises)
+            .then(results => {
+                results.forEach((result, index) => {
+                    if (result.status === 'fulfilled') {
+                        totalSatellites = result.value.totalItems;
+                        result.value.member.forEach(async member => {
 
-                    satellites.push({
-                        name: member.name,
-                        line1: member.line1,
-                        line2: member.line2,
-                        id: member.satelliteId,
-                        date: member.date,
-                        coords: coords
-                    });
+                            // Convertir les données TLE en coordonnées 3D
+                            const coords = await tleTo3dCoordinates(member.line1, member.line2);
+
+                            satellites.push({
+                                name: member.name,
+                                line1: member.line1,
+                                line2: member.line2,
+                                id: member.satelliteId,
+                                date: member.date,
+                                coords: coords
+                            });
+                            saveLastPage(currentPage + index);
+                        });
+                    } else {
+                        console.error(`Erreur lors de la récupération d'une page : ${result.reason}`);
+                    }
                 });
-                saveLastPage(currentPage + index);
-            } else {
-                console.error(`Erreur lors de la récupération d'une page : ${result.reason}`);
-            }
-        });
+            });
     }
 
     function fetchPageWithTimeout(page, timeout) {
@@ -101,7 +104,7 @@ async function updateSatellitesFromAPI() {
             const timer = setTimeout(() => {
                 reject(new Error(`La requête a expiré pour la page ${page}`));
             }, timeout);
-    
+
             fetchPage(page).then(response => {
                 clearTimeout(timer);
                 resolve(response);
@@ -112,30 +115,33 @@ async function updateSatellitesFromAPI() {
         });
     }
 
-    async function processAllPages() {
+    function processAllPages() {
         try {
             // Récupérer le nombre total de satellites pour calculer le nombre total de pages
-            const initialData = await fetchPage(1);
-            totalSatellites = initialData.totalItems;
-            const totalPages = Math.ceil(totalSatellites / satellitesPerPage);
-        
-            while (page <= totalPages) {
-                const endPage = Math.min(page + maxConcurrentRequests - 1, totalPages);
-                const batch = [];
+            return fetchPage(1)
+                .then(initialData => {
+                    totalSatellites = initialData.totalItems;
+                    const totalPages = Math.ceil(totalSatellites / satellitesPerPage);
 
-                for (let i = page; i <= endPage; i++) {
-                    batch.push(i);
-                }
-        
-                await processBatch(batch, page);
-                page += maxConcurrentRequests;
-        
-                console.log(`Nombre de satellites récupérés : ${satellites.length}`);
-                console.log(`Nombre de satellites total : ${totalSatellites}`);
-            }
-        
-            console.log("Récupération des TLE terminée");
-            return true;
+                    while (page <= totalPages) {
+                        const endPage = Math.min(page + maxConcurrentRequests - 1, totalPages);
+                        const batch = [];
+
+                        for (let i = page; i <= endPage; i++) {
+                            batch.push(i);
+                        }
+
+                        return processBatch(batch, page)
+                            .then(() => {
+                                page += maxConcurrentRequests;
+                                console.log(`Nombre de satellites récupérés : ${satellites.length}`);
+                                console.log(`Nombre de satellites total : ${totalSatellites}`);
+                            });
+                    }
+
+                    console.log("Récupération des TLE terminée");
+                    return true;
+                });
 
         } catch (error) {
             console.error('Erreur lors du traitement des données satellites :', error);
@@ -148,7 +154,7 @@ async function updateSatellitesFromAPI() {
         }
     }
 
-    processAllPages();
+    return processAllPages();
 }
 
 function saveSatellites() {
@@ -189,7 +195,7 @@ function getLastPage() {
     return 0; // Retourne 0 si le fichier n'existe pas
 }
 
-async function tleTo3dCoordinates(tleLine1, tleLine2, unit = 1000) {
+function tleTo3dCoordinates(tleLine1, tleLine2, unit = 1000) {
     try {
         const satrec = satellite.twoline2satrec(tleLine1, tleLine2);
         const date = new Date();
